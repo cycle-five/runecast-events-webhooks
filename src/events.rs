@@ -61,6 +61,7 @@ pub struct EntitlementEventData {
 pub struct QuestEventData {
     pub quest_id: String,
     pub user_id: String,
+    /// ISO 8601 timestamp string (e.g., "2023-01-01T00:00:00Z")
     pub enrolled_at: String,
 }
 
