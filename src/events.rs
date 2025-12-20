@@ -1,4 +1,19 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+
+// Event type constants to ensure consistency between serde rename and event_type method
+pub const APPLICATION_AUTHORIZED: &str = "APPLICATION_AUTHORIZED";
+pub const APPLICATION_DEAUTHORIZED: &str = "APPLICATION_DEAUTHORIZED";
+pub const ENTITLEMENT_CREATE: &str = "ENTITLEMENT_CREATE";
+pub const ENTITLEMENT_UPDATE: &str = "ENTITLEMENT_UPDATE";
+pub const ENTITLEMENT_DELETE: &str = "ENTITLEMENT_DELETE";
+pub const QUEST_USER_ENROLLMENT: &str = "QUEST_USER_ENROLLMENT";
+pub const GAME_DIRECT_MESSAGE_CREATE: &str = "GAME_DIRECT_MESSAGE_CREATE";
+pub const GAME_DIRECT_MESSAGE_UPDATE: &str = "GAME_DIRECT_MESSAGE_UPDATE";
+pub const GAME_DIRECT_MESSAGE_DELETE: &str = "GAME_DIRECT_MESSAGE_DELETE";
+pub const LOBBY_MESSAGE_CREATE: &str = "LOBBY_MESSAGE_CREATE";
+pub const LOBBY_MESSAGE_UPDATE: &str = "LOBBY_MESSAGE_UPDATE";
+pub const LOBBY_MESSAGE_DELETE: &str = "LOBBY_MESSAGE_DELETE";
 
 /// Enum representing all Discord webhook event types
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -61,8 +76,8 @@ pub struct EntitlementEventData {
 pub struct QuestEventData {
     pub quest_id: String,
     pub user_id: String,
-    /// ISO 8601 timestamp string (e.g., "2023-01-01T00:00:00Z")
-    pub enrolled_at: String,
+    /// Timestamp when the user enrolled in the quest
+    pub enrolled_at: DateTime<Utc>,
 }
 
 /// Data for game direct message events
@@ -87,18 +102,18 @@ impl DiscordEvent {
     /// Returns the event type as a string
     pub fn event_type(&self) -> &'static str {
         match self {
-            DiscordEvent::ApplicationAuthorized(_) => "APPLICATION_AUTHORIZED",
-            DiscordEvent::ApplicationDeauthorized(_) => "APPLICATION_DEAUTHORIZED",
-            DiscordEvent::EntitlementCreate(_) => "ENTITLEMENT_CREATE",
-            DiscordEvent::EntitlementUpdate(_) => "ENTITLEMENT_UPDATE",
-            DiscordEvent::EntitlementDelete(_) => "ENTITLEMENT_DELETE",
-            DiscordEvent::QuestUserEnrollment(_) => "QUEST_USER_ENROLLMENT",
-            DiscordEvent::GameDirectMessageCreate(_) => "GAME_DIRECT_MESSAGE_CREATE",
-            DiscordEvent::GameDirectMessageUpdate(_) => "GAME_DIRECT_MESSAGE_UPDATE",
-            DiscordEvent::GameDirectMessageDelete(_) => "GAME_DIRECT_MESSAGE_DELETE",
-            DiscordEvent::LobbyMessageCreate(_) => "LOBBY_MESSAGE_CREATE",
-            DiscordEvent::LobbyMessageUpdate(_) => "LOBBY_MESSAGE_UPDATE",
-            DiscordEvent::LobbyMessageDelete(_) => "LOBBY_MESSAGE_DELETE",
+            DiscordEvent::ApplicationAuthorized(_) => APPLICATION_AUTHORIZED,
+            DiscordEvent::ApplicationDeauthorized(_) => APPLICATION_DEAUTHORIZED,
+            DiscordEvent::EntitlementCreate(_) => ENTITLEMENT_CREATE,
+            DiscordEvent::EntitlementUpdate(_) => ENTITLEMENT_UPDATE,
+            DiscordEvent::EntitlementDelete(_) => ENTITLEMENT_DELETE,
+            DiscordEvent::QuestUserEnrollment(_) => QUEST_USER_ENROLLMENT,
+            DiscordEvent::GameDirectMessageCreate(_) => GAME_DIRECT_MESSAGE_CREATE,
+            DiscordEvent::GameDirectMessageUpdate(_) => GAME_DIRECT_MESSAGE_UPDATE,
+            DiscordEvent::GameDirectMessageDelete(_) => GAME_DIRECT_MESSAGE_DELETE,
+            DiscordEvent::LobbyMessageCreate(_) => LOBBY_MESSAGE_CREATE,
+            DiscordEvent::LobbyMessageUpdate(_) => LOBBY_MESSAGE_UPDATE,
+            DiscordEvent::LobbyMessageDelete(_) => LOBBY_MESSAGE_DELETE,
         }
     }
 }
@@ -140,10 +155,11 @@ mod tests {
 
     #[test]
     fn test_quest_user_enrollment_serialization() {
+        let enrolled_at = "2023-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
         let event = DiscordEvent::QuestUserEnrollment(QuestEventData {
             quest_id: "quest_123".to_string(),
             user_id: "user_456".to_string(),
-            enrolled_at: "2023-01-01T00:00:00Z".to_string(),
+            enrolled_at,
         });
         
         let json = serde_json::to_string(&event).unwrap();
