@@ -1,7 +1,11 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-// Event type constants to ensure consistency between serde rename and event_type method
+// Event type constants to ensure consistency between serde rename and event_type method.
+// Note: These constants must match the string literals in #[serde(rename = "...")] attributes below.
+// Serde's rename attribute requires string literals and cannot use const references,
+// so the strings are duplicated by necessity. The constants are used in the event_type() method
+// to provide a single source of truth for runtime usage.
 pub const APPLICATION_AUTHORIZED: &str = "APPLICATION_AUTHORIZED";
 pub const APPLICATION_DEAUTHORIZED: &str = "APPLICATION_DEAUTHORIZED";
 pub const ENTITLEMENT_CREATE: &str = "ENTITLEMENT_CREATE";
