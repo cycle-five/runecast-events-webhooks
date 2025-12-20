@@ -195,4 +195,115 @@ mod tests {
         
         assert_eq!(event.event_type(), "APPLICATION_AUTHORIZED");
     }
+
+    #[test]
+    fn test_application_deauthorized_serialization() {
+        let event = DiscordEvent::ApplicationDeauthorized(ApplicationEventData {
+            application_id: "app_123".to_string(),
+            user_id: "user_456".to_string(),
+            guild_id: Some("guild_789".to_string()),
+        });
+        
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("APPLICATION_DEAUTHORIZED"));
+        
+        let deserialized: DiscordEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(event, deserialized);
+    }
+
+    #[test]
+    fn test_entitlement_update_serialization() {
+        let event = DiscordEvent::EntitlementUpdate(EntitlementEventData {
+            entitlement_id: "ent_update_123".to_string(),
+            user_id: "user_update_456".to_string(),
+            sku_id: "sku_update_789".to_string(),
+            application_id: "app_update_012".to_string(),
+        });
+        
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("ENTITLEMENT_UPDATE"));
+        
+        let deserialized: DiscordEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(event, deserialized);
+    }
+
+    #[test]
+    fn test_entitlement_delete_serialization() {
+        let event = DiscordEvent::EntitlementDelete(EntitlementEventData {
+            entitlement_id: "ent_delete_123".to_string(),
+            user_id: "user_delete_456".to_string(),
+            sku_id: "sku_delete_789".to_string(),
+            application_id: "app_delete_012".to_string(),
+        });
+        
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("ENTITLEMENT_DELETE"));
+        
+        let deserialized: DiscordEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(event, deserialized);
+    }
+
+    #[test]
+    fn test_game_direct_message_update_serialization() {
+        let event = DiscordEvent::GameDirectMessageUpdate(GameMessageEventData {
+            message_id: "msg_update_123".to_string(),
+            channel_id: "ch_update_456".to_string(),
+            author_id: "user_update_789".to_string(),
+            content: "Updated game message".to_string(),
+        });
+        
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("GAME_DIRECT_MESSAGE_UPDATE"));
+        
+        let deserialized: DiscordEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(event, deserialized);
+    }
+
+    #[test]
+    fn test_game_direct_message_delete_serialization() {
+        let event = DiscordEvent::GameDirectMessageDelete(GameMessageEventData {
+            message_id: "msg_delete_123".to_string(),
+            channel_id: "ch_delete_456".to_string(),
+            author_id: "user_delete_789".to_string(),
+            content: "Deleted game message".to_string(),
+        });
+        
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("GAME_DIRECT_MESSAGE_DELETE"));
+        
+        let deserialized: DiscordEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(event, deserialized);
+    }
+
+    #[test]
+    fn test_lobby_message_create_serialization() {
+        let event = DiscordEvent::LobbyMessageCreate(LobbyMessageEventData {
+            message_id: "msg_create_123".to_string(),
+            lobby_id: "lobby_create_456".to_string(),
+            author_id: "user_create_789".to_string(),
+            content: "Created lobby message".to_string(),
+        });
+        
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("LOBBY_MESSAGE_CREATE"));
+        
+        let deserialized: DiscordEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(event, deserialized);
+    }
+
+    #[test]
+    fn test_lobby_message_delete_serialization() {
+        let event = DiscordEvent::LobbyMessageDelete(LobbyMessageEventData {
+            message_id: "msg_delete_123".to_string(),
+            lobby_id: "lobby_delete_456".to_string(),
+            author_id: "user_delete_789".to_string(),
+            content: "Deleted lobby message".to_string(),
+        });
+        
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("LOBBY_MESSAGE_DELETE"));
+        
+        let deserialized: DiscordEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(event, deserialized);
+    }
 }
