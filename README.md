@@ -46,7 +46,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-runecast-events-webhooks = "0.1.0"
+runecast-events-webhooks = "0.2.0"
 ```
 
 ### Basic Example
