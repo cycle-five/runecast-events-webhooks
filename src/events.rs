@@ -19,9 +19,16 @@ pub const LOBBY_MESSAGE_CREATE: &str = "LOBBY_MESSAGE_CREATE";
 pub const LOBBY_MESSAGE_UPDATE: &str = "LOBBY_MESSAGE_UPDATE";
 pub const LOBBY_MESSAGE_DELETE: &str = "LOBBY_MESSAGE_DELETE";
 
-/// Enum representing all Discord webhook event types
+/// Enum representing all Discord webhook event types.
+///
+/// Uses **adjacent tagging** (`#[serde(tag = "type", content = "data")]`)
+/// because that's the exact shape Discord puts inside its `event` wrapper:
+/// `{"type": "ENTITLEMENT_CREATE", "data": { ... }}`. Combined with
+/// `#[serde(flatten)]` on `DiscordEventBody.event`, this means the whole
+/// inner-event JSON round-trips through a fully typed enum — no
+/// `serde_json::Value` step on the consumer side.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "type")]
+#[serde(tag = "type", content = "data")]
 pub enum DiscordEvent {
     // Application events
     #[serde(rename = "APPLICATION_AUTHORIZED")]
@@ -80,12 +87,15 @@ pub struct EntitlementEventData {
     pub sku_id: String,
     /// The application that owns the SKU/entitlement.
     pub application_id: String,
-    /// Entitlement type (see Discord docs: 1= purchase, 2=premium_sub, 3=gift, 4=test, etc.)
-    /// Accepts "type" (from real Discord data JSON) on deserialze via alias;
-    /// serializes as "entitlement_type" to avoid key conflict with outer event "type" discriminator.
-    #[serde(rename = "entitlement_type", alias = "type")]
+    /// Entitlement type (see Discord docs: 1=purchase, 2=premium_sub, 3=gift, 4=test, etc).
+    /// Discord wire field is `type`; renamed in Rust to `entitlement_type` for
+    /// clarity. Adjacent tagging on the outer `DiscordEvent` means this `type`
+    /// lives nested under `event.data.type` and doesn't collide with the
+    /// event-discriminator `type` one level up.
+    #[serde(rename = "type")]
     pub entitlement_type: i32,
-    /// Whether this is a test entitlement (created via API for testing).
+    /// Whether a consumable entitlement has been used/consumed. Distinct from
+    /// `deleted`; defaults to false for non-consumable entitlements.
     #[serde(default)]
     pub consumed: bool,
     /// Whether the entitlement has been deleted/revoked.
@@ -161,15 +171,24 @@ pub struct DiscordWebhookPayload {
 }
 
 /// The `event` wrapper inside a kind=1 payload.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// `event` (the typed `DiscordEvent` enum) is flattened in, so the wire JSON
+/// shape is `{"type": "...", "timestamp": "...", "data": {...}}` — exactly
+/// what Discord sends. Consumers match on `event` directly:
+///
+/// ```ignore
+/// match payload.event.as_ref().map(|b| &b.event) {
+///     Some(DiscordEvent::EntitlementCreate(ent)) => { /* typed */ }
+///     Some(DiscordEvent::ApplicationAuthorized(app)) => { /* typed */ }
+///     None => { /* PING (kind=0) */ }
+///     _ => { /* unhandled variant */ }
+/// }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DiscordEventBody {
-    /// The specific event type, e.g. "ENTITLEMENT_CREATE".
-    #[serde(rename = "type")]
-    pub event_type: String,
-    pub timestamp: String,
-    /// The event-specific data. For entitlement events this will deserialize
-    /// into an object matching EntitlementEventData (among others).
-    pub data: serde_json::Value,
+    pub timestamp: DateTime<Utc>,
+    #[serde(flatten)]
+    pub event: DiscordEvent,
 }
 
 #[cfg(test)]
@@ -198,10 +217,9 @@ mod tests {
     #[test]
     fn test_outer_envelope_entitlement_create_real_shape() {
         // Realistic shape Discord actually POSTs for ENTITLEMENT_CREATE.
-        // Key thing to lock down: the inner `data.type` field (an int, 1 = purchase)
-        // must land in EntitlementEventData::entitlement_type via the
-        // `#[serde(alias = "type")]` attribute — without it the outer `type`
-        // discriminator would collide.
+        // Under adjacent tagging (tag="type", content="data") + flatten in
+        // DiscordEventBody, the inner-event JSON deserializes directly into
+        // the typed DiscordEvent enum — no Value step.
         let body = r#"{
             "version": 1,
             "application_id": "1234567890123456789",
@@ -224,22 +242,18 @@ mod tests {
 
         let payload: DiscordWebhookPayload = serde_json::from_str(body).unwrap();
         assert_eq!(payload.kind, 1);
-        let event = payload.event.expect("kind=1 must carry an event body");
-        assert_eq!(event.event_type, "ENTITLEMENT_CREATE");
-
-        // Two-step deserialize: payload.event.data is Value (Discord's data
-        // field varies by event type), so consumers re-deserialize into the
-        // appropriate typed struct based on event_type.
-        let ent: EntitlementEventData = serde_json::from_value(event.data).unwrap();
-        assert_eq!(ent.id, "1100000000000000001");
-        assert_eq!(
-            ent.entitlement_type, 1,
-            "inner data.type=1 must land in entitlement_type via serde alias"
-        );
-        assert_eq!(ent.user_id, "3300000000000000003");
-        assert!(!ent.deleted);
-        assert!(ent.starts_at.is_none());
-        assert!(ent.ends_at.is_none());
+        let body = payload.event.expect("kind=1 must carry an event body");
+        match &body.event {
+            DiscordEvent::EntitlementCreate(ent) => {
+                assert_eq!(ent.id, "1100000000000000001");
+                assert_eq!(ent.entitlement_type, 1, "inner data.type=1 → entitlement_type");
+                assert_eq!(ent.user_id, "3300000000000000003");
+                assert!(!ent.deleted);
+                assert!(ent.starts_at.is_none());
+                assert!(ent.ends_at.is_none());
+            }
+            other => panic!("expected EntitlementCreate, got {:?}", other),
+        }
     }
 
     #[test]
@@ -267,14 +281,16 @@ mod tests {
         }"#;
 
         let payload: DiscordWebhookPayload = serde_json::from_str(body).unwrap();
-        let event = payload.event.unwrap();
-        assert_eq!(event.event_type, "ENTITLEMENT_DELETE");
-
-        let ent: EntitlementEventData = serde_json::from_value(event.data).unwrap();
-        assert!(ent.deleted);
-        assert_eq!(ent.entitlement_type, 2);
-        assert!(ent.starts_at.is_some());
-        assert!(ent.ends_at.is_some());
+        let body = payload.event.unwrap();
+        match &body.event {
+            DiscordEvent::EntitlementDelete(ent) => {
+                assert!(ent.deleted);
+                assert_eq!(ent.entitlement_type, 2);
+                assert!(ent.starts_at.is_some());
+                assert!(ent.ends_at.is_some());
+            }
+            other => panic!("expected EntitlementDelete, got {:?}", other),
+        }
     }
 
     #[test]
