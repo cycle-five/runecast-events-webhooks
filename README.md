@@ -1,96 +1,105 @@
-# runecast-events-webhooks
+# discord-webhook-events
 
-A Rust library for handling Discord webhook events with type-safe event definitions.
+A Rust library providing type-safe definitions for [Discord Webhook Events](https://discord.com/developers/docs/events/webhook-events).
 
 ## Overview
 
-This library provides comprehensive type definitions and utilities for working with Discord webhook events. It supports all Discord event types including:
+When you register a Webhook Events URL in the Discord Developer Portal, Discord POSTs a `DiscordWebhookPayload` to your endpoint for each subscribed event. This crate gives you the typed structs to deserialize those payloads — no `serde_json::Value` unwrapping required.
 
-- **Application Events**: Authorization and deauthorization
-- **Entitlement Events**: Create, update, and delete operations
-- **Quest Events**: User enrollment tracking
-- **Game Events**: Direct messages and lobby messages (create, update, delete)
+Supported event categories:
 
-## Features
+- **Application**: `APPLICATION_AUTHORIZED`, `APPLICATION_DEAUTHORIZED`
+- **Entitlements**: `ENTITLEMENT_CREATE`, `ENTITLEMENT_UPDATE`, `ENTITLEMENT_DELETE`
+- **Quests**: `QUEST_USER_ENROLLMENT`
+- **Game messages**: `GAME_DIRECT_MESSAGE_CREATE/UPDATE/DELETE`, `LOBBY_MESSAGE_CREATE/UPDATE/DELETE`
 
-- 🔒 Type-safe event handling with Rust's strong type system
-- 📦 Serde-based JSON serialization/deserialization
-- ✅ Comprehensive test coverage
-- 📚 Well-documented API with examples
-
-## Supported Events
-
-### Applications
-- `APPLICATION_AUTHORIZED`
-- `APPLICATION_DEAUTHORIZED`
-
-### Entitlements
-- `ENTITLEMENT_CREATE`
-- `ENTITLEMENT_UPDATE`
-- `ENTITLEMENT_DELETE`
-
-### Quests
-- `QUEST_USER_ENROLLMENT`
-
-### Games
-- `GAME_DIRECT_MESSAGE_CREATE`
-- `GAME_DIRECT_MESSAGE_UPDATE`
-- `GAME_DIRECT_MESSAGE_DELETE`
-- `LOBBY_MESSAGE_CREATE`
-- `LOBBY_MESSAGE_UPDATE`
-- `LOBBY_MESSAGE_DELETE`
-
-## Usage
-
-Add this to your `Cargo.toml`:
+## Installation
 
 ```toml
 [dependencies]
-runecast-events-webhooks = "0.2.0"
+discord-webhook-events = "0.3"
 ```
 
-### Basic Example
+## Usage
+
+### Receiving a webhook
+
+The outer type is `DiscordWebhookPayload`. Deserialize the raw POST body into it, then match on `payload.event`:
 
 ```rust
-use runecast_events_webhooks::{DiscordEvent, ApplicationEventData};
+use discord_webhook_events::{DiscordEvent, DiscordWebhookPayload};
 
-// Create an event
-let event = DiscordEvent::ApplicationAuthorized(ApplicationEventData {
-    application_id: "123456789".to_string(),
-    user_id: "987654321".to_string(),
-    guild_id: Some("555555555".to_string()),
-});
+fn handle_webhook(body: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let payload: DiscordWebhookPayload = serde_json::from_str(body)?;
 
-// Serialize to JSON
-let json = serde_json::to_string(&event).unwrap();
+    // kind=0 is a PING — Discord sends this once when you register the URL.
+    // Respond with 204 No Content.
+    if payload.kind == 0 {
+        return Ok(());
+    }
 
-// Deserialize from JSON
-let parsed: DiscordEvent = serde_json::from_str(&json).unwrap();
-
-// Get event type
-println!("Event type: {}", event.event_type());
+    match payload.event.as_ref().map(|b| &b.event) {
+        Some(DiscordEvent::EntitlementCreate(ent)) => {
+            println!("New entitlement: sku={} user={}", ent.sku_id, ent.user_id);
+        }
+        Some(DiscordEvent::EntitlementDelete(ent)) => {
+            println!("Entitlement revoked: sku={} user={}", ent.sku_id, ent.user_id);
+        }
+        Some(DiscordEvent::ApplicationAuthorized(app)) => {
+            // application_id lives in the outer envelope, not in app data
+            println!(
+                "App {} authorized by user {} (scopes: {})",
+                payload.application_id,
+                app.user.id,
+                app.scopes.join(", ")
+            );
+        }
+        Some(other) => {
+            println!("Unhandled event: {}", other.event_type());
+        }
+        None => {}
+    }
+    Ok(())
+}
 ```
 
-### Running Examples
+### Wire shape
+
+Discord sends a JSON body like this for a `kind=1` (event) payload:
+
+```json
+{
+  "version": 1,
+  "application_id": "1234560123453231555",
+  "type": 1,
+  "event": {
+    "type": "ENTITLEMENT_CREATE",
+    "timestamp": "2026-06-01T20:00:00Z",
+    "data": {
+      "id": "1100000000000000001",
+      "sku_id": "2200000000000000002",
+      "application_id": "1234560123453231555",
+      "user_id": "3300000000000000003",
+      "type": 1,
+      "deleted": false
+    }
+  }
+}
+```
+
+`DiscordEvent` uses adjacent tagging (`#[serde(tag = "type", content = "data")]`) matching this exact shape, combined with `#[serde(flatten)]` on `DiscordEventBody.event` — so the entire inner payload deserializes into a typed enum without an intermediate `Value` step.
+
+## Running examples
 
 ```bash
 cargo run --example basic_usage
 ```
 
-## Development
-
-### Building
-
-```bash
-cargo build
-```
-
-### Testing
-
-```bash
-cargo test
-```
-
 ## License
 
-This project is available under the MIT or Apache 2.0 license, at your option.
+Licensed under either of:
+
+- [MIT License](LICENSE-MIT)
+- [Apache License, Version 2.0](LICENSE-APACHE)
+
+at your option.
