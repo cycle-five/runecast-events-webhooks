@@ -75,6 +75,8 @@ pub struct ApplicationEventData {
     /// 0 = guild install, 1 = user install
     pub integration_type: u8,
     /// OAuth2 scopes granted (e.g. `["applications.commands"]`).
+    /// Absent on APPLICATION_DEAUTHORIZED payloads — defaults to empty.
+    #[serde(default)]
     pub scopes: Vec<String>,
     /// The user who authorized/deauthorized the app.
     pub user: PartialUser,
@@ -505,6 +507,40 @@ mod tests {
             guild: None,
         });
         assert_eq!(event.event_type(), "APPLICATION_AUTHORIZED");
+    }
+
+    #[test]
+    fn test_outer_envelope_application_deauthorized_omits_scopes() {
+        // Discord's APPLICATION_DEAUTHORIZED payload omits `scopes`.
+        // Deserialization must succeed with scopes defaulting to an empty Vec.
+        let body = r#"{
+            "version": 1,
+            "application_id": "1234560123453231555",
+            "type": 1,
+            "event": {
+                "type": "APPLICATION_DEAUTHORIZED",
+                "timestamp": "2026-06-01T20:00:00Z",
+                "data": {
+                    "integration_type": 1,
+                    "user": {
+                        "id": "3300000000000000003",
+                        "username": "testuser",
+                        "global_name": null,
+                        "avatar": null
+                    }
+                }
+            }
+        }"#;
+
+        let payload: DiscordWebhookPayload = serde_json::from_str(body).unwrap();
+        let event_body = payload.event.unwrap();
+        match &event_body.event {
+            DiscordEvent::ApplicationDeauthorized(app) => {
+                assert_eq!(app.user.id, "3300000000000000003");
+                assert!(app.scopes.is_empty(), "scopes must default to empty when absent");
+            }
+            other => panic!("expected ApplicationDeauthorized, got {:?}", other),
+        }
     }
 
     #[test]
