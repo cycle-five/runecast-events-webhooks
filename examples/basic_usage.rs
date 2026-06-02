@@ -17,10 +17,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Example 2: Entitlement Create Event
     let entitlement_create = DiscordEvent::EntitlementCreate(EntitlementEventData {
-        entitlement_id: "ent_123456".to_string(),
+        id: "ent_123456".to_string(),
         user_id: "user_789".to_string(),
         sku_id: "sku_abc".to_string(),
         application_id: "app_xyz".to_string(),
+        entitlement_type: 1,
+        consumed: false,
+        deleted: false,
+        starts_at: None,
+        ends_at: None,
     });
     println!("Entitlement Create Event:");
     println!("{}", serde_json::to_string_pretty(&entitlement_create)?);

@@ -19,9 +19,16 @@ pub const LOBBY_MESSAGE_CREATE: &str = "LOBBY_MESSAGE_CREATE";
 pub const LOBBY_MESSAGE_UPDATE: &str = "LOBBY_MESSAGE_UPDATE";
 pub const LOBBY_MESSAGE_DELETE: &str = "LOBBY_MESSAGE_DELETE";
 
-/// Enum representing all Discord webhook event types
+/// Enum representing all Discord webhook event types.
+///
+/// Uses **adjacent tagging** (`#[serde(tag = "type", content = "data")]`)
+/// because that's the exact shape Discord puts inside its `event` wrapper:
+/// `{"type": "ENTITLEMENT_CREATE", "data": { ... }}`. Combined with
+/// `#[serde(flatten)]` on `DiscordEventBody.event`, this means the whole
+/// inner-event JSON round-trips through a fully typed enum — no
+/// `serde_json::Value` step on the consumer side.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "type")]
+#[serde(tag = "type", content = "data")]
 pub enum DiscordEvent {
     // Application events
     #[serde(rename = "APPLICATION_AUTHORIZED")]
@@ -29,7 +36,8 @@ pub enum DiscordEvent {
     #[serde(rename = "APPLICATION_DEAUTHORIZED")]
     ApplicationDeauthorized(ApplicationEventData),
     
-    // Entitlement events
+    // Entitlement events (the inner event; see DiscordWebhookPayload for the full
+    // POST body Discord actually sends, which wraps this under `event.data`).
     #[serde(rename = "ENTITLEMENT_CREATE")]
     EntitlementCreate(EntitlementEventData),
     #[serde(rename = "ENTITLEMENT_UPDATE")]
@@ -66,13 +74,39 @@ pub struct ApplicationEventData {
     pub guild_id: Option<String>,
 }
 
-/// Data for entitlement events
+/// Data for entitlement events.
+/// This models the `data` object inside ENTITLEMENT_* webhook events (and is
+/// compatible with the shape returned by Discord's Entitlements REST API).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EntitlementEventData {
-    pub entitlement_id: String,
+    /// Discord snowflake ID of the entitlement (use this as the primary key).
+    pub id: String,
+    /// The user who received the entitlement.
     pub user_id: String,
+    /// The SKU that was entitled.
     pub sku_id: String,
+    /// The application that owns the SKU/entitlement.
     pub application_id: String,
+    /// Entitlement type (see Discord docs: 1=purchase, 2=premium_sub, 3=gift, 4=test, etc).
+    /// Discord wire field is `type`; renamed in Rust to `entitlement_type` for
+    /// clarity. Adjacent tagging on the outer `DiscordEvent` means this `type`
+    /// lives nested under `event.data.type` and doesn't collide with the
+    /// event-discriminator `type` one level up.
+    #[serde(rename = "type")]
+    pub entitlement_type: i32,
+    /// Whether a consumable entitlement has been used/consumed. Distinct from
+    /// `deleted`; defaults to false for non-consumable entitlements.
+    #[serde(default)]
+    pub consumed: bool,
+    /// Whether the entitlement has been deleted/revoked.
+    #[serde(default)]
+    pub deleted: bool,
+    /// For subscriptions: when it starts.
+    pub starts_at: Option<DateTime<Utc>>,
+    /// For subscriptions: when it ends (null for lifetime).
+    pub ends_at: Option<DateTime<Utc>>,
+    // Additional fields from Discord (gift_code_flags, promotion_id, etc.) can be
+    // added here as needed; kept minimal for now while covering premium use-case.
 }
 
 /// Data for quest enrollment events
@@ -122,9 +156,142 @@ impl DiscordEvent {
     }
 }
 
+/// Outer payload that Discord actually POSTs to your Webhook Events URL.
+///
+/// See: https://discord.com/developers/docs/events/webhook-events
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscordWebhookPayload {
+    pub version: u32,
+    pub application_id: String,
+    /// 0 = PING (must ack with 204), 1 = event (see `event` field).
+    #[serde(rename = "type")]
+    pub kind: u32,
+    /// Present when kind == 1.
+    pub event: Option<DiscordEventBody>,
+}
+
+/// The `event` wrapper inside a kind=1 payload.
+///
+/// `event` (the typed `DiscordEvent` enum) is flattened in, so the wire JSON
+/// shape is `{"type": "...", "timestamp": "...", "data": {...}}` — exactly
+/// what Discord sends. Consumers match on `event` directly:
+///
+/// ```ignore
+/// match payload.event.as_ref().map(|b| &b.event) {
+///     Some(DiscordEvent::EntitlementCreate(ent)) => { /* typed */ }
+///     Some(DiscordEvent::ApplicationAuthorized(app)) => { /* typed */ }
+///     None => { /* PING (kind=0) */ }
+///     _ => { /* unhandled variant */ }
+/// }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DiscordEventBody {
+    pub timestamp: DateTime<Utc>,
+    #[serde(flatten)]
+    pub event: DiscordEvent,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- Outer-envelope tests: the actual shape Discord POSTs to the
+    //      Webhook Events URL. Inner-event tests below this block exercise
+    //      DiscordEvent round-trip, but the wire shape is DiscordWebhookPayload.
+
+    #[test]
+    fn test_outer_envelope_ping_deserializes() {
+        // Per Discord docs: kind=0 is a PING, sent once when you register the
+        // Webhook Events URL. event must be absent / None.
+        let body = r#"{
+            "version": 1,
+            "application_id": "1234567890123456789",
+            "type": 0
+        }"#;
+        let payload: DiscordWebhookPayload = serde_json::from_str(body).unwrap();
+        assert_eq!(payload.kind, 0);
+        assert_eq!(payload.version, 1);
+        assert!(payload.event.is_none(), "PING must not carry an event body");
+    }
+
+    #[test]
+    fn test_outer_envelope_entitlement_create_real_shape() {
+        // Realistic shape Discord actually POSTs for ENTITLEMENT_CREATE.
+        // Under adjacent tagging (tag="type", content="data") + flatten in
+        // DiscordEventBody, the inner-event JSON deserializes directly into
+        // the typed DiscordEvent enum — no Value step.
+        let body = r#"{
+            "version": 1,
+            "application_id": "1234567890123456789",
+            "type": 1,
+            "event": {
+                "type": "ENTITLEMENT_CREATE",
+                "timestamp": "2026-06-01T20:00:00Z",
+                "data": {
+                    "id": "1100000000000000001",
+                    "sku_id": "2200000000000000002",
+                    "application_id": "1234567890123456789",
+                    "user_id": "3300000000000000003",
+                    "type": 1,
+                    "deleted": false,
+                    "starts_at": null,
+                    "ends_at": null
+                }
+            }
+        }"#;
+
+        let payload: DiscordWebhookPayload = serde_json::from_str(body).unwrap();
+        assert_eq!(payload.kind, 1);
+        let body = payload.event.expect("kind=1 must carry an event body");
+        match &body.event {
+            DiscordEvent::EntitlementCreate(ent) => {
+                assert_eq!(ent.id, "1100000000000000001");
+                assert_eq!(ent.entitlement_type, 1, "inner data.type=1 → entitlement_type");
+                assert_eq!(ent.user_id, "3300000000000000003");
+                assert!(!ent.deleted);
+                assert!(ent.starts_at.is_none());
+                assert!(ent.ends_at.is_none());
+            }
+            other => panic!("expected EntitlementCreate, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_outer_envelope_entitlement_delete_has_timestamps() {
+        // ENTITLEMENT_DELETE typically carries a deleted=true flag and may
+        // have ends_at set to indicate when access stopped.
+        let body = r#"{
+            "version": 1,
+            "application_id": "1234567890123456789",
+            "type": 1,
+            "event": {
+                "type": "ENTITLEMENT_DELETE",
+                "timestamp": "2026-06-01T20:00:00Z",
+                "data": {
+                    "id": "1100000000000000001",
+                    "sku_id": "2200000000000000002",
+                    "application_id": "1234567890123456789",
+                    "user_id": "3300000000000000003",
+                    "type": 2,
+                    "deleted": true,
+                    "starts_at": "2026-01-01T00:00:00Z",
+                    "ends_at": "2026-06-01T00:00:00Z"
+                }
+            }
+        }"#;
+
+        let payload: DiscordWebhookPayload = serde_json::from_str(body).unwrap();
+        let body = payload.event.unwrap();
+        match &body.event {
+            DiscordEvent::EntitlementDelete(ent) => {
+                assert!(ent.deleted);
+                assert_eq!(ent.entitlement_type, 2);
+                assert!(ent.starts_at.is_some());
+                assert!(ent.ends_at.is_some());
+            }
+            other => panic!("expected EntitlementDelete, got {:?}", other),
+        }
+    }
 
     #[test]
     fn test_application_authorized_serialization() {
@@ -144,10 +311,15 @@ mod tests {
     #[test]
     fn test_entitlement_create_serialization() {
         let event = DiscordEvent::EntitlementCreate(EntitlementEventData {
-            entitlement_id: "ent_123".to_string(),
+            id: "ent_123".to_string(),
             user_id: "user_456".to_string(),
             sku_id: "sku_789".to_string(),
             application_id: "app_012".to_string(),
+            entitlement_type: 1,
+            consumed: false,
+            deleted: false,
+            starts_at: None,
+            ends_at: None,
         });
         
         let json = serde_json::to_string(&event).unwrap();
@@ -234,10 +406,15 @@ mod tests {
     #[test]
     fn test_entitlement_update_serialization() {
         let event = DiscordEvent::EntitlementUpdate(EntitlementEventData {
-            entitlement_id: "ent_update_123".to_string(),
+            id: "ent_update_123".to_string(),
             user_id: "user_update_456".to_string(),
             sku_id: "sku_update_789".to_string(),
             application_id: "app_update_012".to_string(),
+            entitlement_type: 2,
+            consumed: false,
+            deleted: false,
+            starts_at: None,
+            ends_at: Some("2025-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap()),
         });
         
         let json = serde_json::to_string(&event).unwrap();
@@ -250,10 +427,15 @@ mod tests {
     #[test]
     fn test_entitlement_delete_serialization() {
         let event = DiscordEvent::EntitlementDelete(EntitlementEventData {
-            entitlement_id: "ent_delete_123".to_string(),
+            id: "ent_delete_123".to_string(),
             user_id: "user_delete_456".to_string(),
             sku_id: "sku_delete_789".to_string(),
             application_id: "app_delete_012".to_string(),
+            entitlement_type: 1,
+            consumed: false,
+            deleted: true,
+            starts_at: None,
+            ends_at: None,
         });
         
         let json = serde_json::to_string(&event).unwrap();

@@ -25,8 +25,8 @@
 mod events;
 
 pub use events::{
-    ApplicationEventData, DiscordEvent, EntitlementEventData, GameMessageEventData,
-    LobbyMessageEventData, QuestEventData,
+    ApplicationEventData, DiscordEvent, DiscordEventBody, DiscordWebhookPayload,
+    EntitlementEventData, GameMessageEventData, LobbyMessageEventData, QuestEventData,
     // Export event type constants for consistency
     APPLICATION_AUTHORIZED, APPLICATION_DEAUTHORIZED,
     ENTITLEMENT_CREATE, ENTITLEMENT_UPDATE, ENTITLEMENT_DELETE,
