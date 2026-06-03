@@ -6,18 +6,36 @@
 //! ## Example
 //!
 //! ```rust
-//! use runecast_events_webhooks::{DiscordEvent, ApplicationEventData};
+//! use discord_webhook_events::{DiscordWebhookPayload, DiscordEvent};
 //!
 //! # fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! let event = DiscordEvent::ApplicationAuthorized(ApplicationEventData {
-//!     application_id: "123".to_string(),
-//!     user_id: "456".to_string(),
-//!     guild_id: Some("789".to_string()),
-//! });
+//! // Deserialize the raw POST body Discord sends to your webhook URL.
+//! let raw = r#"{
+//!     "version": 1,
+//!     "application_id": "1234560123453231555",
+//!     "type": 1,
+//!     "event": {
+//!         "type": "ENTITLEMENT_CREATE",
+//!         "timestamp": "2026-06-01T20:00:00Z",
+//!         "data": {
+//!             "id": "1100000000000000001",
+//!             "sku_id": "2200000000000000002",
+//!             "application_id": "1234560123453231555",
+//!             "user_id": "3300000000000000003",
+//!             "type": 1,
+//!             "deleted": false
+//!         }
+//!     }
+//! }"#;
 //!
-//! // Proper error handling with ? operator
-//! let json = serde_json::to_string(&event)?;
-//! let parsed: DiscordEvent = serde_json::from_str(&json)?;
+//! let payload: DiscordWebhookPayload = serde_json::from_str(raw)?;
+//! match payload.event.as_ref().map(|b| &b.event) {
+//!     Some(DiscordEvent::EntitlementCreate(ent)) => {
+//!         println!("New entitlement for user {}", ent.user_id);
+//!     }
+//!     None => { /* PING — ack with 204 */ }
+//!     _ => {}
+//! }
 //! # Ok(())
 //! # }
 //! ```
@@ -26,7 +44,8 @@ mod events;
 
 pub use events::{
     ApplicationEventData, DiscordEvent, DiscordEventBody, DiscordWebhookPayload,
-    EntitlementEventData, GameMessageEventData, LobbyMessageEventData, QuestEventData,
+    EntitlementEventData, GameMessageEventData, LobbyMessageEventData, PartialGuild,
+    PartialUser, QuestEventData,
     // Export event type constants for consistency
     APPLICATION_AUTHORIZED, APPLICATION_DEAUTHORIZED,
     ENTITLEMENT_CREATE, ENTITLEMENT_UPDATE, ENTITLEMENT_DELETE,

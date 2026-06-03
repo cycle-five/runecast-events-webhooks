@@ -66,12 +66,45 @@ pub enum DiscordEvent {
     LobbyMessageDelete(LobbyMessageEventData),
 }
 
-/// Data for application authorization events
+/// Data for application authorization/deauthorization events.
+///
+/// Discord's wire shape has a nested `user` object and optional `guild` object;
+/// `application_id` lives in the outer `DiscordWebhookPayload`, not here.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ApplicationEventData {
-    pub application_id: String,
-    pub user_id: String,
-    pub guild_id: Option<String>,
+    /// 0 = guild install, 1 = user install
+    pub integration_type: u8,
+    /// OAuth2 scopes granted (e.g. `["applications.commands"]`).
+    /// Absent on APPLICATION_DEAUTHORIZED payloads — defaults to empty.
+    #[serde(default)]
+    pub scopes: Vec<String>,
+    /// The user who authorized/deauthorized the app.
+    pub user: PartialUser,
+    /// Present for guild installs; absent for user-account installs.
+    pub guild: Option<PartialGuild>,
+}
+
+/// Minimal Discord User object as sent inside webhook event payloads.
+///
+/// Only the fields reliably present in webhook contexts are required; the rest
+/// are optional so the struct tolerates Discord adding or omitting fields.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PartialUser {
+    /// Discord snowflake ID (string on the wire).
+    pub id: String,
+    pub username: String,
+    /// Display name (may differ from `username`). Present for non-bot users.
+    pub global_name: Option<String>,
+    /// CDN hash for the user's avatar, or `None` if they have no custom avatar.
+    pub avatar: Option<String>,
+}
+
+/// Minimal Discord Guild object as sent inside webhook event payloads.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PartialGuild {
+    /// Discord snowflake ID (string on the wire).
+    pub id: String,
+    pub name: Option<String>,
 }
 
 /// Data for entitlement events.
@@ -296,16 +329,99 @@ mod tests {
     #[test]
     fn test_application_authorized_serialization() {
         let event = DiscordEvent::ApplicationAuthorized(ApplicationEventData {
-            application_id: "123".to_string(),
-            user_id: "456".to_string(),
-            guild_id: Some("789".to_string()),
+            integration_type: 1,
+            scopes: vec!["applications.commands".to_string()],
+            user: PartialUser {
+                id: "456".to_string(),
+                username: "testuser".to_string(),
+                global_name: Some("Test User".to_string()),
+                avatar: None,
+            },
+            guild: None,
         });
-        
+
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("APPLICATION_AUTHORIZED"));
-        
+
         let deserialized: DiscordEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, deserialized);
+    }
+
+    #[test]
+    fn test_outer_envelope_application_authorized_real_shape() {
+        // Real Discord APPLICATION_AUTHORIZED webhook shape per Discord docs.
+        // Note: application_id is in the outer envelope, not in event.data.
+        let body = r#"{
+            "version": 1,
+            "application_id": "1234560123453231555",
+            "type": 1,
+            "event": {
+                "type": "APPLICATION_AUTHORIZED",
+                "timestamp": "2026-06-01T20:00:00Z",
+                "data": {
+                    "integration_type": 1,
+                    "scopes": ["applications.commands"],
+                    "user": {
+                        "id": "3300000000000000003",
+                        "username": "testuser",
+                        "global_name": "Test User",
+                        "avatar": null
+                    }
+                }
+            }
+        }"#;
+
+        let payload: DiscordWebhookPayload = serde_json::from_str(body).unwrap();
+        assert_eq!(payload.application_id, "1234560123453231555");
+        let event_body = payload.event.expect("kind=1 must carry an event body");
+        match &event_body.event {
+            DiscordEvent::ApplicationAuthorized(app) => {
+                assert_eq!(app.user.id, "3300000000000000003");
+                assert_eq!(app.integration_type, 1);
+                assert_eq!(app.scopes, vec!["applications.commands"]);
+                assert!(app.guild.is_none(), "user-account install has no guild");
+            }
+            other => panic!("expected ApplicationAuthorized, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_outer_envelope_application_authorized_guild_install() {
+        // Guild installs carry a `guild` object alongside `user`.
+        let body = r#"{
+            "version": 1,
+            "application_id": "1234560123453231555",
+            "type": 1,
+            "event": {
+                "type": "APPLICATION_AUTHORIZED",
+                "timestamp": "2026-06-01T20:00:00Z",
+                "data": {
+                    "integration_type": 0,
+                    "scopes": ["bot", "applications.commands"],
+                    "user": {
+                        "id": "3300000000000000003",
+                        "username": "testuser",
+                        "global_name": null,
+                        "avatar": null
+                    },
+                    "guild": {
+                        "id": "9900000000000000009",
+                        "name": "Test Server"
+                    }
+                }
+            }
+        }"#;
+
+        let payload: DiscordWebhookPayload = serde_json::from_str(body).unwrap();
+        let event_body = payload.event.unwrap();
+        match &event_body.event {
+            DiscordEvent::ApplicationAuthorized(app) => {
+                assert_eq!(app.integration_type, 0);
+                let guild = app.guild.as_ref().expect("guild install must have guild");
+                assert_eq!(guild.id, "9900000000000000009");
+            }
+            other => panic!("expected ApplicationAuthorized, got {:?}", other),
+        }
     }
 
     #[test]
@@ -380,25 +496,70 @@ mod tests {
     #[test]
     fn test_event_type_method() {
         let event = DiscordEvent::ApplicationAuthorized(ApplicationEventData {
-            application_id: "123".to_string(),
-            user_id: "456".to_string(),
-            guild_id: None,
+            integration_type: 1,
+            scopes: vec![],
+            user: PartialUser {
+                id: "123".to_string(),
+                username: "u".to_string(),
+                global_name: None,
+                avatar: None,
+            },
+            guild: None,
         });
-        
         assert_eq!(event.event_type(), "APPLICATION_AUTHORIZED");
+    }
+
+    #[test]
+    fn test_outer_envelope_application_deauthorized_omits_scopes() {
+        // Discord's APPLICATION_DEAUTHORIZED payload omits `scopes`.
+        // Deserialization must succeed with scopes defaulting to an empty Vec.
+        let body = r#"{
+            "version": 1,
+            "application_id": "1234560123453231555",
+            "type": 1,
+            "event": {
+                "type": "APPLICATION_DEAUTHORIZED",
+                "timestamp": "2026-06-01T20:00:00Z",
+                "data": {
+                    "integration_type": 1,
+                    "user": {
+                        "id": "3300000000000000003",
+                        "username": "testuser",
+                        "global_name": null,
+                        "avatar": null
+                    }
+                }
+            }
+        }"#;
+
+        let payload: DiscordWebhookPayload = serde_json::from_str(body).unwrap();
+        let event_body = payload.event.unwrap();
+        match &event_body.event {
+            DiscordEvent::ApplicationDeauthorized(app) => {
+                assert_eq!(app.user.id, "3300000000000000003");
+                assert!(app.scopes.is_empty(), "scopes must default to empty when absent");
+            }
+            other => panic!("expected ApplicationDeauthorized, got {:?}", other),
+        }
     }
 
     #[test]
     fn test_application_deauthorized_serialization() {
         let event = DiscordEvent::ApplicationDeauthorized(ApplicationEventData {
-            application_id: "app_123".to_string(),
-            user_id: "user_456".to_string(),
-            guild_id: Some("guild_789".to_string()),
+            integration_type: 1,
+            scopes: vec!["applications.commands".to_string()],
+            user: PartialUser {
+                id: "user_456".to_string(),
+                username: "testuser".to_string(),
+                global_name: None,
+                avatar: None,
+            },
+            guild: None,
         });
-        
+
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("APPLICATION_DEAUTHORIZED"));
-        
+
         let deserialized: DiscordEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, deserialized);
     }
