@@ -1,3 +1,4 @@
+mod relay;
 mod sig;
 
 fn main() {
