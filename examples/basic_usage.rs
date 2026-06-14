@@ -63,16 +63,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }"#;
     let payload: DiscordWebhookPayload = serde_json::from_str(auth_body)?;
     let app_id = &payload.application_id;
-    match payload.event.as_ref().map(|b| &b.event) {
-        Some(DiscordEvent::ApplicationAuthorized(app)) => {
-            println!(
-                "App {} authorized by user {} (scopes: {})",
-                app_id,
-                app.user.id,
-                app.scopes.join(", ")
-            );
-        }
-        _ => {}
+    if let Some(DiscordEvent::ApplicationAuthorized(app)) =
+        payload.event.as_ref().map(|b| &b.event)
+    {
+        println!(
+            "App {} authorized by user {} (scopes: {})",
+            app_id,
+            app.user.id,
+            app.scopes.join(", ")
+        );
     }
 
     // --- Constructing events (e.g. for tests or mocking) ---

@@ -224,6 +224,16 @@ pub struct DiscordEventBody {
     pub event: DiscordEvent,
 }
 
+/// The receiver→backend wire shape. The receiver has already verified the
+/// Discord signature; this carries the typed inner event plus the
+/// `application_id` from the outer `DiscordWebhookPayload` envelope (which the
+/// backend's app-auth handler needs and which does not live on `event.data`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RelayEnvelope {
+    pub application_id: String,
+    pub event: DiscordEvent,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -668,5 +678,26 @@ mod tests {
         
         let deserialized: DiscordEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, deserialized);
+    }
+
+    #[test]
+    fn test_relay_envelope_roundtrips() {
+        let env = RelayEnvelope {
+            application_id: "1234560123453231555".to_string(),
+            event: DiscordEvent::EntitlementCreate(EntitlementEventData {
+                id: "1".to_string(),
+                user_id: "2".to_string(),
+                sku_id: "3".to_string(),
+                application_id: "1234560123453231555".to_string(),
+                entitlement_type: 1,
+                consumed: false,
+                deleted: false,
+                starts_at: None,
+                ends_at: None,
+            }),
+        };
+        let json = serde_json::to_string(&env).unwrap();
+        let back: RelayEnvelope = serde_json::from_str(&json).unwrap();
+        assert_eq!(env, back);
     }
 }

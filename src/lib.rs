@@ -45,7 +45,7 @@ mod events;
 pub use events::{
     ApplicationEventData, DiscordEvent, DiscordEventBody, DiscordWebhookPayload,
     EntitlementEventData, GameMessageEventData, LobbyMessageEventData, PartialGuild,
-    PartialUser, QuestEventData,
+    PartialUser, QuestEventData, RelayEnvelope,
     // Export event type constants for consistency
     APPLICATION_AUTHORIZED, APPLICATION_DEAUTHORIZED,
     ENTITLEMENT_CREATE, ENTITLEMENT_UPDATE, ENTITLEMENT_DELETE,
