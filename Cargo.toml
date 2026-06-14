@@ -1,6 +1,6 @@
 [package]
 name = "discord-webhook-events"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 description = "Type-safe Rust definitions for Discord Webhook Events (APPLICATION_AUTHORIZED, ENTITLEMENT_CREATE/UPDATE/DELETE, and more)"
 repository = "https://github.com/cycle-five/runecast-events-webhooks"
