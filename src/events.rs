@@ -72,7 +72,11 @@ pub enum DiscordEvent {
 /// `application_id` lives in the outer `DiscordWebhookPayload`, not here.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ApplicationEventData {
-    /// 0 = guild install, 1 = user install
+    /// 0 = guild install, 1 = user install.
+    /// Absent on real APPLICATION_DEAUTHORIZED payloads (whose `data` carries
+    /// only `user`) — defaults to 0. Not used for any RuneCast logic (the
+    /// audit handler records user/application/guild only).
+    #[serde(default)]
     pub integration_type: u8,
     /// OAuth2 scopes granted (e.g. `["applications.commands"]`).
     /// Absent on APPLICATION_DEAUTHORIZED payloads — defaults to empty.
@@ -219,9 +223,33 @@ pub struct DiscordWebhookPayload {
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DiscordEventBody {
+    #[serde(deserialize_with = "deserialize_flexible_timestamp")]
     pub timestamp: DateTime<Utc>,
     #[serde(flatten)]
     pub event: DiscordEvent,
+}
+
+/// Discord's webhook-event `timestamp` is inconsistent: the docs show RFC3339
+/// with a `Z`, but real `APPLICATION_*` payloads send a timezone-NAIVE value
+/// (e.g. `"2026-06-14T21:11:45.364754"`), which `DateTime<Utc>`'s default
+/// deserializer rejects (and `#[serde(flatten)]` then misreports as
+/// "premature end of input"). Accept both; a naive value is treated as UTC.
+fn deserialize_flexible_timestamp<'de, D>(deserializer: D) -> Result<DateTime<Utc>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    if let Ok(dt) = DateTime::parse_from_rfc3339(&s) {
+        return Ok(dt.with_timezone(&Utc));
+    }
+    for fmt in ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%dT%H:%M:%S"] {
+        if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(&s, fmt) {
+            return Ok(DateTime::from_naive_utc_and_offset(naive, Utc));
+        }
+    }
+    Err(serde::de::Error::custom(format!(
+        "unrecognized Discord timestamp format: {s}"
+    )))
 }
 
 /// The receiver→backend wire shape. The receiver has already verified the
@@ -699,5 +727,57 @@ mod tests {
         let json = serde_json::to_string(&env).unwrap();
         let back: RelayEnvelope = serde_json::from_str(&json).unwrap();
         assert_eq!(env, back);
+    }
+
+    #[test]
+    fn test_real_application_deauthorized_payload_parses() {
+        // Captured verbatim from staging (2026-06-14) via the receiver's
+        // ack-resilient raw-body log. Two real-world deviations broke the
+        // original schema (serde misreported both as "premature end of input"
+        // because of the #[serde(flatten)] on DiscordEventBody.event):
+        //   1. event.timestamp is timezone-NAIVE ("…45.364754", no Z/offset) —
+        //      DateTime<Utc> rejected it. Affects EVERY event type.
+        //   2. APPLICATION_DEAUTHORIZED data is just {"user": {…}} — no
+        //      integration_type (was a required field); the user object also
+        //      carries many fields PartialUser doesn't model (clan, collectibles,
+        //      primary_guild, …) which must be ignored.
+        let body = br#"{"version":1,"application_id":"1441164723981779035","type":1,"event":{"type":"APPLICATION_DEAUTHORIZED","timestamp":"2026-06-14T21:11:45.364754","data":{"user":{"avatar":"eb0e334170b3b7f501d535241a4552b6","avatar_decoration_data":null,"clan":{"badge":"53559e093e2b289a926ea09976b0ee5d","identity_enabled":true,"identity_guild_id":"1429029305244979254","tag":"v0+X"},"collectibles":null,"discriminator":"0","display_name_styles":null,"global_name":null,"id":"285219649921220608","primary_guild":{"badge":"53559e093e2b289a926ea09976b0ee5d","identity_enabled":true,"identity_guild_id":"1429029305244979254","tag":"v0+X"},"public_flags":0,"username":"lothrop"}}}}"#;
+
+        let payload: DiscordWebhookPayload =
+            serde_json::from_slice(body).expect("real APPLICATION_DEAUTHORIZED payload must parse");
+        assert_eq!(payload.application_id, "1441164723981779035");
+        let event_body = payload.event.expect("kind=1 carries an event body");
+        match &event_body.event {
+            DiscordEvent::ApplicationDeauthorized(app) => {
+                assert_eq!(app.user.id, "285219649921220608");
+                assert_eq!(app.user.username, "lothrop");
+                assert!(app.user.global_name.is_none());
+                assert!(app.scopes.is_empty(), "deauthorized data omits scopes");
+                assert!(app.guild.is_none(), "deauthorized data omits guild");
+            }
+            other => panic!("expected ApplicationDeauthorized, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_naive_timestamp_on_entitlement_parses() {
+        // The flexible timestamp applies to every event type — guard the
+        // premium-critical ENTITLEMENT path against Discord's naive timestamp.
+        let body = br#"{"version":1,"application_id":"1","type":1,"event":{"type":"ENTITLEMENT_CREATE","timestamp":"2026-06-14T21:11:45.364754","data":{"id":"1","sku_id":"2","application_id":"1","user_id":"3","type":1,"deleted":false}}}"#;
+        let payload: DiscordWebhookPayload =
+            serde_json::from_slice(body).expect("naive-timestamp entitlement must parse");
+        let event_body = payload.event.expect("kind=1 carries an event body");
+        assert!(matches!(
+            event_body.event,
+            DiscordEvent::EntitlementCreate(_)
+        ));
+        // The naive value is interpreted as UTC.
+        assert_eq!(
+            event_body
+                .timestamp
+                .format("%Y-%m-%dT%H:%M:%S")
+                .to_string(),
+            "2026-06-14T21:11:45"
+        );
     }
 }
