@@ -57,13 +57,23 @@ mod tests {
     #[test]
     fn accepts_valid() {
         let (pk, sig) = sign(b"{\"x\":1}", "1717286400");
-        assert!(verify_discord_signature(&pk, &sig, "1717286400", b"{\"x\":1}"));
+        assert!(verify_discord_signature(
+            &pk,
+            &sig,
+            "1717286400",
+            b"{\"x\":1}"
+        ));
     }
 
     #[test]
     fn rejects_tampered_body() {
         let (pk, sig) = sign(b"{\"x\":1}", "1717286400");
-        assert!(!verify_discord_signature(&pk, &sig, "1717286400", b"{\"x\":2}"));
+        assert!(!verify_discord_signature(
+            &pk,
+            &sig,
+            "1717286400",
+            b"{\"x\":2}"
+        ));
     }
 
     #[test]

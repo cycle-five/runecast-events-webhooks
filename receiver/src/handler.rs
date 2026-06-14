@@ -88,7 +88,10 @@ pub async fn handle_discord_webhook(
                 tracing::error!(error = %e, "Failed to relay Discord event to backend");
             }
         } else {
-            tracing::debug!(kind = event_body.event.event_type(), "Unhandled Discord event; ignoring");
+            tracing::debug!(
+                kind = event_body.event.event_type(),
+                "Unhandled Discord event; ignoring"
+            );
         }
     }
     StatusCode::NO_CONTENT
@@ -149,7 +152,8 @@ mod tests {
 
     #[tokio::test]
     async fn unparseable_but_signed_204s_and_does_not_relay() {
-        let body = br#"{"version":1,"application_id":"app1","type":1,"event":{"type":"ENTITLEMENT_CR"#; // truncated
+        let body =
+            br#"{"version":1,"application_id":"app1","type":1,"event":{"type":"ENTITLEMENT_CR"#; // truncated
         let (state, headers, relay) = signed_state_and_headers(body);
         let code = handle_discord_webhook(State(state), headers, Bytes::from(body.to_vec())).await;
         assert_eq!(code, StatusCode::NO_CONTENT, "ack-resilience: never 400");
