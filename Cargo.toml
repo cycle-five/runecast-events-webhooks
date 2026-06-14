@@ -1,6 +1,6 @@
 [package]
 name = "discord-webhook-events"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 description = "Type-safe Rust definitions for Discord Webhook Events (APPLICATION_AUTHORIZED, ENTITLEMENT_CREATE/UPDATE/DELETE, and more)"
 repository = "https://github.com/cycle-five/runecast-events-webhooks"
@@ -12,3 +12,10 @@ categories = ["api-bindings", "encoding"]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 chrono = { version = "0.4", default-features = false, features = ["serde", "std"] }
+
+# The lib stays at the repo root (package name `discord-webhook-events`) so the
+# backend's `git` + `tag` dependency continues to resolve it by name. The
+# `receiver` binary is a sibling workspace member.
+[workspace]
+members = ["receiver"]
+resolver = "2"
