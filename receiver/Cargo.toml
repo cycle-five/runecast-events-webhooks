@@ -5,6 +5,9 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Standalone Discord Webhook Events receiver that verifies and relays events to a backend"
 repository = "https://github.com/cycle-five/runecast-events-webhooks"
+# This is a deployable binary, never a crates.io artifact (only the root lib
+# `discord-webhook-events` is published). Guard against an accidental publish.
+publish = false
 
 [dependencies]
 discord-webhook-events = { path = ".." }

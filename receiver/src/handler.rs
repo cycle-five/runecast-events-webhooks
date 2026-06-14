@@ -32,6 +32,7 @@ pub async fn handle_discord_webhook(
     let signature = match headers
         .get("X-Signature-Ed25519")
         .and_then(|v| v.to_str().ok())
+        .filter(|s| !s.is_empty())
     {
         Some(s) => s,
         None => return StatusCode::UNAUTHORIZED,
@@ -39,6 +40,7 @@ pub async fn handle_discord_webhook(
     let timestamp = match headers
         .get("X-Signature-Timestamp")
         .and_then(|v| v.to_str().ok())
+        .filter(|s| !s.is_empty())
     {
         Some(s) => s,
         None => return StatusCode::UNAUTHORIZED,
@@ -71,7 +73,6 @@ pub async fn handle_discord_webhook(
     }
 
     if let Some(event_body) = payload.event {
-        // Best-effort relay; we've already decided to ack Discord.
         if matches!(
             &event_body.event,
             DiscordEvent::EntitlementCreate(_)
@@ -80,13 +81,18 @@ pub async fn handle_discord_webhook(
                 | DiscordEvent::ApplicationAuthorized(_)
                 | DiscordEvent::ApplicationDeauthorized(_)
         ) {
-            if let Err(e) = state
-                .relay
-                .deliver(&payload.application_id, &event_body.event)
-                .await
-            {
-                tracing::error!(error = %e, "Failed to relay Discord event to backend");
-            }
+            // Relay in the background. We've already decided to ack Discord, so a
+            // slow or hung backend must not delay the 204 — that would re-couple
+            // the services and risk the retry storm this receiver exists to
+            // prevent. Best-effort: on failure the polling path backfills.
+            let relay = state.relay.clone();
+            let application_id = payload.application_id;
+            let event = event_body.event;
+            tokio::spawn(async move {
+                if let Err(e) = relay.deliver(&application_id, &event).await {
+                    tracing::error!(error = %e, "Failed to relay Discord event to backend");
+                }
+            });
         } else {
             tracing::debug!(
                 kind = event_body.event.event_type(),
@@ -111,7 +117,7 @@ mod tests {
         0x7f, 0x60,
     ];
 
-    fn signed_state_and_headers(body: &[u8]) -> (AppState, HeaderMap, Arc<MockRelay>) {
+    fn signed_headers(body: &[u8]) -> (String, HeaderMap) {
         let key = SigningKey::from_bytes(&SEED);
         let pk = hex::encode(key.verifying_key().to_bytes());
         let ts = Utc::now().timestamp().to_string();
@@ -121,6 +127,11 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("X-Signature-Ed25519", HeaderValue::from_str(&sig).unwrap());
         headers.insert("X-Signature-Timestamp", HeaderValue::from_str(&ts).unwrap());
+        (pk, headers)
+    }
+
+    fn signed_state_and_headers(body: &[u8]) -> (AppState, HeaderMap, Arc<MockRelay>) {
+        let (pk, headers) = signed_headers(body);
         let relay = Arc::new(MockRelay::default());
         (
             AppState {
@@ -132,13 +143,43 @@ mod tests {
         )
     }
 
+    /// The relay now runs in a spawned task, so a successful delivery is observed
+    /// asynchronously. Yield until it lands (bounded so a regression can't hang).
+    async fn wait_for_deliveries(relay: &MockRelay, n: usize) {
+        for _ in 0..1000 {
+            if relay.delivered.lock().unwrap().len() >= n {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+        panic!("relay did not record {n} deliveries");
+    }
+
     #[tokio::test]
     async fn entitlement_create_relays_and_204s() {
         let body = br#"{"version":1,"application_id":"app1","type":1,"event":{"type":"ENTITLEMENT_CREATE","timestamp":"2026-06-01T20:00:00Z","data":{"id":"1","sku_id":"2","application_id":"app1","user_id":"3","type":1,"deleted":false}}}"#;
         let (state, headers, relay) = signed_state_and_headers(body);
         let code = handle_discord_webhook(State(state), headers, Bytes::from(body.to_vec())).await;
         assert_eq!(code, StatusCode::NO_CONTENT);
+        wait_for_deliveries(&relay, 1).await;
         assert_eq!(relay.delivered.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn relay_failure_still_204s() {
+        // Best-effort: a relay error must not change the 204 we send Discord.
+        let body = br#"{"version":1,"application_id":"app1","type":1,"event":{"type":"ENTITLEMENT_CREATE","timestamp":"2026-06-01T20:00:00Z","data":{"id":"1","sku_id":"2","application_id":"app1","user_id":"3","type":1,"deleted":false}}}"#;
+        let (pk, headers) = signed_headers(body);
+        let state = AppState {
+            public_key: pk,
+            relay: Arc::new(crate::relay::tests::FailingRelay),
+        };
+        let code = handle_discord_webhook(State(state), headers, Bytes::from(body.to_vec())).await;
+        assert_eq!(
+            code,
+            StatusCode::NO_CONTENT,
+            "best-effort: relay error must not change the 204"
+        );
     }
 
     #[tokio::test]
