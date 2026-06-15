@@ -14,6 +14,10 @@ on:
   push:
     branches: [master]
     tags: ['v*']
+    # Docs-only changes don't alter the image — skip the build. Release tags
+    # always carry a Cargo.toml version-bump commit (a non-.md change), so this
+    # filter never skips a tagged release build.
+    paths-ignore: ['**.md', 'LICENSE-*', '.gitignore']
 
 env:
   REGISTRY: ghcr.io

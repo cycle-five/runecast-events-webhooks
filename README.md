@@ -17,7 +17,7 @@ Supported event categories:
 
 ```toml
 [dependencies]
-discord-webhook-events = "0.3"
+discord-webhook-events = "0.4"
 ```
 
 ## Usage
@@ -33,7 +33,8 @@ fn handle_webhook(body: &str) -> Result<(), Box<dyn std::error::Error>> {
     let payload: DiscordWebhookPayload = serde_json::from_str(body)?;
 
     // kind=0 is a PING — Discord sends this once when you register the URL.
-    // Respond with 204 No Content.
+    // Your HTTP layer must ack it with 204 No Content AND a valid
+    // Content-Type header (see "Responding to the PING" below).
     if payload.kind == 0 {
         return Ok(());
     }
@@ -62,6 +63,39 @@ fn handle_webhook(body: &str) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+
+### Responding to the PING
+
+The `handle_webhook` example above only *deserializes and dispatches* — turning
+the result into an HTTP response is your framework's job, and Discord is strict
+about that ack. A registered Webhook Events endpoint must answer the PING with
+**both**:
+
+1. **HTTP `204 No Content`** (empty body), and
+2. **a valid `Content-Type` header** on that response.
+
+The second one is an easy trap: several frameworks send *no* `Content-Type` when
+you return an empty-body 204 — axum, for instance, omits it for a bare
+`StatusCode` — and Discord rejects the endpoint registration when the header is
+missing. Set one explicitly; `application/json` is fine even though the body is
+empty:
+
+```rust
+use axum::http::{header, HeaderValue, StatusCode};
+use axum::response::{IntoResponse, Response};
+
+// Per-handler: stamp Content-Type onto the empty 204 ack.
+fn ack() -> Response {
+    let mut res = StatusCode::NO_CONTENT.into_response();
+    res.headers_mut()
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    res
+}
+```
+
+For a whole service, a `map_response` middleware that fills in a default
+`Content-Type` on any response missing one covers every status (204 / 401 / 413)
+in one place.
 
 ### Wire shape
 
